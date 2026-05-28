@@ -17,10 +17,9 @@ interface ShortestPathProblem {
 class ParallelShortestPath extends RecursiveTask<List<Integer>> {
     private ShortestPathProblem problem;
     private AtomicInteger bestPathLength;
-
-    // --- LA MAGIA: UMBRAL DE SECUENCIALIDAD ---
-    // Si la ruta ya tiene esta longitud, dejamos de paralelizar y pasamos a secuencial.
-    private static final int FORK_THRESHOLD = 3;
+    
+    // Profundizamos el umbral porque el árbol ahora es masivo
+    private static final int FORK_THRESHOLD = 4; 
 
     public ParallelShortestPath(ShortestPathProblem problem, AtomicInteger bestPathLength) {
         this.problem = problem;
@@ -30,7 +29,7 @@ class ParallelShortestPath extends RecursiveTask<List<Integer>> {
     @Override
     protected List<Integer> compute() {
         if (problem.getCurrentPathLength() >= bestPathLength.get()) return null;
-
+        
         if (problem.isSolution()) {
             int len = problem.getCurrentPathLength();
             bestPathLength.updateAndGet(cur -> Math.min(cur, len));
@@ -40,27 +39,25 @@ class ParallelShortestPath extends RecursiveTask<List<Integer>> {
         List<Integer> moves = problem.getPossibleMoves();
         if (moves.isEmpty()) return null;
 
-        // Si ya estamos profundos en el árbol, resolvemos el resto secuencialmente
-        // en este mismo hilo, evitando crear miles de micro-tareas inútiles.
         if (problem.getCurrentPathLength() >= FORK_THRESHOLD) {
             return Main.solveSequentialLocal(problem, bestPathLength);
         }
 
         List<Integer> shortestPath = null;
         List<ParallelShortestPath> tasks = new ArrayList<>();
-
+        
         for (int move : moves) {
             problem.applyMove(move);
             tasks.add(new ParallelShortestPath(problem.cloneProblem(), bestPathLength));
             problem.undoMove(move);
         }
-
+        
         for (int i = 0; i < tasks.size() - 1; i++) tasks.get(i).fork();
-
+        
         List<Integer> local = tasks.get(tasks.size() - 1).compute();
         if (local != null && (shortestPath == null || local.size() < shortestPath.size()))
             shortestPath = local;
-
+            
         for (int i = 0; i < tasks.size() - 1; i++) {
             List<Integer> p = tasks.get(i).join();
             if (p != null && (shortestPath == null || p.size() < shortestPath.size()))
@@ -94,7 +91,8 @@ class MyShortestPathProblem implements ShortestPathProblem {
     }
     @Override public List<Integer> getPossibleMoves() {
         List<Integer> mv = new ArrayList<>();
-        for (int i=0; i<graph.length; i++) if (graph[currentNode][i]==1 && !visited[i]) mv.add(i);
+        // Invertimos el bucle para cambiar el sesgo direccional de búsqueda
+        for (int i=graph.length-1; i>=0; i--) if (graph[currentNode][i]==1 && !visited[i]) mv.add(i);
         return mv;
     }
     @Override public List<Integer> getCurrentPath() { return currentPath; }
@@ -106,37 +104,50 @@ class MyShortestPathProblem implements ShortestPathProblem {
 
 public class Main {
 
-    static int[][] generateLayeredGraph(int n, int layers, long seed) {
+    // Generador de "Laberinto" en lugar de "Autopista"
+    static int[][] generateLabyrinthGraph(int n, int layers, long seed) {
         java.util.Random rng = new java.util.Random(seed);
         int[][] g = new int[n][n];
         int perLayer = n / layers;
+        
         for (int layer = 0; layer < layers - 1; layer++) {
             int from = layer * perLayer;
             int to   = (layer + 1) * perLayer;
+            
+            // Forzamos al menos 1 ruta garantizada para que haya solución
+            for (int i = from; i < from + perLayer; i++) {
+                int randomNext = to + rng.nextInt(Math.min(perLayer, n - to));
+                g[i][randomNext] = 1; g[randomNext][i] = 1;
+            }
+
+            // Conexiones escasas entre capas (30% vs 85% anterior)
             for (int i = from; i < from + perLayer; i++)
                 for (int j = to; j < Math.min(to + perLayer, n); j++)
-                    if (rng.nextDouble() < 0.85) { g[i][j]=1; g[j][i]=1; }
+                    if (rng.nextDouble() < 0.30) { g[i][j]=1; g[j][i]=1; }
+            
+            // Conexiones internas para despistar (20% vs 70% anterior)
             for (int i = from; i < from + perLayer; i++)
                 for (int j = i+1; j < from + perLayer; j++)
-                    if (rng.nextDouble() < 0.7) { g[i][j]=1; g[j][i]=1; }
+                    if (rng.nextDouble() < 0.20) { g[i][j]=1; g[j][i]=1; }
         }
         return g;
     }
 
     public static void main(String[] args) {
-        // Aumentamos considerablemente el tamaño del problema
-        final int N      = 60;
-        final int START  = 0;
+        // Modo bestia: 300 nodos, 12 capas
+        final int N      = 300; 
         final int TARGET = N - 1;
-        final int REPS   = 1;  // Un solo recorrido gigante es suficiente
+        final int START  = 0;
+        final int REPS   = 1; 
 
-        int[][] graph = generateLayeredGraph(N, 6, 99L);
+        // Usamos nuestro nuevo generador de laberintos
+        int[][] graph = generateLabyrinthGraph(N, 12, 101L);
 
-        System.out.println("=== Iniciando prueba de rendimiento (Grafo Gigante) ===");
+        System.out.println("=== Iniciando STRESS TEST (Laberinto) ===");
         System.out.println("Núcleos disponibles: " + Runtime.getRuntime().availableProcessors());
-        System.out.println("Nodos: " + N);
+        System.out.println("Nodos: " + N + " | Capas: 12 | Conexiones: Bajas (Alto Backtracking)\n");
 
-        // --- Secuencial Puro (Línea base) ---
+        // --- Secuencial ---
         long startTimeSeq = System.currentTimeMillis();
         List<Integer> shortestPathSeq = null;
         for (int i = 0; i < REPS; i++)
@@ -144,12 +155,12 @@ public class Main {
                     new MyShortestPathProblem(graph, START, TARGET), Integer.MAX_VALUE);
         long durationSeq = System.currentTimeMillis() - startTimeSeq;
 
-        System.out.println("\n[Secuencial] Camino encontrado: " + shortestPathSeq);
+        System.out.println("[Secuencial] Camino encontrado: " + shortestPathSeq);
         System.out.println("[Secuencial] Longitud del camino: " +
                 (shortestPathSeq != null ? shortestPathSeq.size() : "N/A"));
         System.out.println("[Secuencial] Tiempo de ejecución: " + durationSeq + " ms");
 
-        // --- Paralelo (Híbrido) ---
+        // --- Paralelo Híbrido ---
         ForkJoinPool pool = new ForkJoinPool();
         long startTimePar = System.currentTimeMillis();
         List<Integer> shortestPathPar = null;
@@ -176,17 +187,16 @@ public class Main {
             System.out.println("Speedup: el secuencial fue más rápido en este entorno");
     }
 
-    // Método secuencial clásico para la línea base
     static List<Integer> solveSequentialPure(ShortestPathProblem p, int best) {
         if (p.getCurrentPathLength() >= best) return null;
         if (p.isSolution()) return new ArrayList<>(p.getCurrentPath());
-
+        
         List<Integer> shortest = null;
         for (int move : p.getPossibleMoves()) {
             p.applyMove(move);
             List<Integer> path = solveSequentialPure(p, best);
             if (path != null && (shortest == null || path.size() < shortest.size())) {
-                shortest = path;
+                shortest = path; 
                 best = path.size();
             }
             p.undoMove(move);
@@ -194,17 +204,15 @@ public class Main {
         return shortest;
     }
 
-    // Método secuencial que es llamado por los hilos paralelos al cruzar el umbral
-    // Utiliza el AtomicInteger compartido para podar ramas globales inútiles.
     public static List<Integer> solveSequentialLocal(ShortestPathProblem p, AtomicInteger globalBest) {
         if (p.getCurrentPathLength() >= globalBest.get()) return null;
-
+        
         if (p.isSolution()) {
             int len = p.getCurrentPathLength();
             globalBest.updateAndGet(cur -> Math.min(cur, len));
             return new ArrayList<>(p.getCurrentPath());
         }
-
+        
         List<Integer> shortest = null;
         for (int move : p.getPossibleMoves()) {
             p.applyMove(move);
