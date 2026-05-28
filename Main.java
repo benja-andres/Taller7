@@ -119,9 +119,9 @@ public class Main {
 
         // Definimos los 4 escenarios de matrices a comparar
         String[] nombres = { "Matriz 1: Pequeña e hiperconectada", "Matriz 2: Mediana estándar", "Matriz 3: Grande (Laberinto complejo)", "Matriz 4: Monstruo masivo" };
-        int[] nodos      = { 25, 80, 250, 400 };
-        int[] capas      = { 5,  8,  12,  15 };
-        double[] densidades = { 0.85, 0.50, 0.25, 0.18 }; // Menor densidad = más caminos difíciles (backtracking)
+        int[] nodos      = { 20, 50, 100, 130 };
+        int[] capas      = { 4,  6,   8,   10 };
+        double[] densidades = { 0.85, 0.50, 0.35, 0.25 };
 
         List<String> reporteFinal = new ArrayList<>();
         ForkJoinPool pool = new ForkJoinPool();
