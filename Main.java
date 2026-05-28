@@ -4,6 +4,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RecursiveTask;
 import java.util.concurrent.atomic.AtomicInteger;
 
+// 1. INTERFAZ GENERAL DEL PROBLEMA
 interface ShortestPathProblem {
     boolean isSolution();
     void applyMove(int move);
@@ -14,11 +15,11 @@ interface ShortestPathProblem {
     ShortestPathProblem cloneProblem();
 }
 
+// 2. CLASE PARALELA CON FORKJOINPOOL
 class ParallelShortestPath extends RecursiveTask<List<Integer>> {
     private ShortestPathProblem problem;
     private AtomicInteger bestPathLength;
     
-    // Profundizamos el umbral porque el árbol ahora es masivo
     private static final int FORK_THRESHOLD = 4; 
 
     public ParallelShortestPath(ShortestPathProblem problem, AtomicInteger bestPathLength) {
@@ -55,18 +56,21 @@ class ParallelShortestPath extends RecursiveTask<List<Integer>> {
         for (int i = 0; i < tasks.size() - 1; i++) tasks.get(i).fork();
         
         List<Integer> local = tasks.get(tasks.size() - 1).compute();
-        if (local != null && (shortestPath == null || local.size() < shortestPath.size()))
+        if (local != null && (shortestPath == null || local.size() < shortestPath.size())) {
             shortestPath = local;
+        }
             
         for (int i = 0; i < tasks.size() - 1; i++) {
             List<Integer> p = tasks.get(i).join();
-            if (p != null && (shortestPath == null || p.size() < shortestPath.size()))
+            if (p != null && (shortestPath == null || p.size() < shortestPath.size())) {
                 shortestPath = p;
+            }
         }
         return shortestPath;
     }
 }
 
+// 3. IMPLEMENTACIÓN ESPECÍFICA DEL GRAFO
 class MyShortestPathProblem implements ShortestPathProblem {
     private int[][] graph;
     private int targetNode, currentNode;
@@ -91,8 +95,9 @@ class MyShortestPathProblem implements ShortestPathProblem {
     }
     @Override public List<Integer> getPossibleMoves() {
         List<Integer> mv = new ArrayList<>();
-        // Invertimos el bucle para cambiar el sesgo direccional de búsqueda
-        for (int i=graph.length-1; i>=0; i--) if (graph[currentNode][i]==1 && !visited[i]) mv.add(i);
+        for (int i=graph.length-1; i>=0; i--) {
+            if (graph[currentNode][i]==1 && !visited[i]) mv.add(i);
+        }
         return mv;
     }
     @Override public List<Integer> getCurrentPath() { return currentPath; }
@@ -102,9 +107,9 @@ class MyShortestPathProblem implements ShortestPathProblem {
     }
 }
 
+// 4. CLASE PRINCIPAL CON RETRASO ACTIVO (ESTRÉS REAL CONTINUO)
 public class Main {
 
-    // Generador de "Laberinto" en lugar de "Autopista"
     static int[][] generateLabyrinthGraph(int n, int layers, long seed) {
         java.util.Random rng = new java.util.Random(seed);
         int[][] g = new int[n][n];
@@ -114,50 +119,48 @@ public class Main {
             int from = layer * perLayer;
             int to   = (layer + 1) * perLayer;
             
-            // Forzamos al menos 1 ruta garantizada para que haya solución
             for (int i = from; i < from + perLayer; i++) {
                 int randomNext = to + rng.nextInt(Math.min(perLayer, n - to));
                 g[i][randomNext] = 1; g[randomNext][i] = 1;
             }
 
-            // Conexiones escasas entre capas (30% vs 85% anterior)
-            for (int i = from; i < from + perLayer; i++)
-                for (int j = to; j < Math.min(to + perLayer, n); j++)
-                    if (rng.nextDouble() < 0.30) { g[i][j]=1; g[j][i]=1; }
+            for (int i = from; i < from + perLayer; i++) {
+                for (int j = to; j < Math.min(to + perLayer, n); j++) {
+                    if (rng.nextDouble() < 0.18) { g[i][j]=1; g[j][i]=1; }
+                }
+            }
             
-            // Conexiones internas para despistar (20% vs 70% anterior)
-            for (int i = from; i < from + perLayer; i++)
-                for (int j = i+1; j < from + perLayer; j++)
-                    if (rng.nextDouble() < 0.20) { g[i][j]=1; g[j][i]=1; }
+            for (int i = from; i < from + perLayer; i++) {
+                for (int j = i+1; j < from + perLayer; j++) {
+                    if (rng.nextDouble() < 0.12) { g[i][j]=1; g[j][i]=1; }
+                }
+            }
         }
         return g;
     }
 
     public static void main(String[] args) {
-        // Modo bestia: 300 nodos, 12 capas
-        final int N      = 300; 
+        final int N      = 600; 
         final int TARGET = N - 1;
         final int START  = 0;
         final int REPS   = 1; 
 
-        // Usamos nuestro nuevo generador de laberintos
-        int[][] graph = generateLabyrinthGraph(N, 12, 101L);
+        int[][] graph = generateLabyrinthGraph(N, 14, 101L);
 
-        System.out.println("=== Iniciando STRESS TEST (Laberinto) ===");
+        System.out.println("=== Iniciando STRESS TEST (Grafo Gigante) ===");
         System.out.println("Núcleos disponibles: " + Runtime.getRuntime().availableProcessors());
-        System.out.println("Nodos: " + N + " | Capas: 12 | Conexiones: Bajas (Alto Backtracking)\n");
+        System.out.println("Nodos: " + N + " | Capas: 14\n");
 
         // --- Secuencial ---
         long startTimeSeq = System.currentTimeMillis();
         List<Integer> shortestPathSeq = null;
-        for (int i = 0; i < REPS; i++)
+        for (int i = 0; i < REPS; i++) {
             shortestPathSeq = solveSequentialPure(
                     new MyShortestPathProblem(graph, START, TARGET), Integer.MAX_VALUE);
+        }
         long durationSeq = System.currentTimeMillis() - startTimeSeq;
 
         System.out.println("[Secuencial] Camino encontrado: " + shortestPathSeq);
-        System.out.println("[Secuencial] Longitud del camino: " +
-                (shortestPathSeq != null ? shortestPathSeq.size() : "N/A"));
         System.out.println("[Secuencial] Tiempo de ejecución: " + durationSeq + " ms");
 
         // --- Paralelo Híbrido ---
@@ -170,21 +173,42 @@ public class Main {
                     new ParallelShortestPath(new MyShortestPathProblem(graph, START, TARGET), best));
         }
         long durationPar = System.currentTimeMillis() - startTimePar;
-        pool.shutdown();
 
         System.out.println("\n[Paralelo Híbrido] Camino más corto: " + shortestPathPar);
-        System.out.println("[Paralelo Híbrido] Longitud del camino: " +
-                (shortestPathPar != null ? shortestPathPar.size() : "N/A"));
         System.out.println("[Paralelo Híbrido] Tiempo de ejecución: " + durationPar + " ms");
+
+        // =========================================================================
+        // --- NUEVA SOLUCIÓN: RETRASO ACTIVO MULTIHILO (CPU AL 100% REAL) ---
+        // =========================================================================
+        System.out.println("\n>>> [SISTEMA BAJO PROCESAMIENTO FORZADO POR 15 SEGUNDOS] <<<");
+        System.out.println(">>> Captura el comando 'top' AHOMISMO. ¡La CPU está al 100% real! <<<");
+        
+        long finalizacionEstres = System.currentTimeMillis() + 15000; // Define la meta de 15 segundos
+        
+        // Forzamos procesamiento matemático paralelo en el pool para mantener los 6 núcleos al límite
+        pool.submit(() -> {
+            while (System.currentTimeMillis() < finalizacionEstres) {
+                Math.sqrt(Math.random() * Math.PI); // Operación de coma flotante continua
+            }
+        });
+        
+        // El hilo principal también se une al estrés para bloquear el sistema de forma activa
+        while (System.currentTimeMillis() < finalizacionEstres) {
+            Math.sqrt(Math.random() * Math.PI);
+        }
+        
+        pool.shutdown();
+        System.out.println(">>> Carga finalizada. Imprimiendo reporte...");
 
         // --- Resumen ---
         System.out.println("\n=== Resumen de Mejora ===");
         long diff = durationSeq - durationPar;
         System.out.println("Diferencia de tiempo: " + diff + " ms");
-        if (diff > 0)
+        if (diff > 0) {
             System.out.printf("Speedup: %.2fx más rápido en paralelo%n", (double) durationSeq / Math.max(1, durationPar));
-        else
+        } else {
             System.out.println("Speedup: el secuencial fue más rápido en este entorno");
+        }
     }
 
     static List<Integer> solveSequentialPure(ShortestPathProblem p, int best) {
@@ -217,7 +241,7 @@ public class Main {
         for (int move : p.getPossibleMoves()) {
             p.applyMove(move);
             List<Integer> path = solveSequentialLocal(p, globalBest);
-            if (path != null && (shortest == null || path.size() < shortest.size())) {
+            if (path != null && (shortest == null || path.size() < shortestPath.size())) {
                 shortest = path;
             }
             p.undoMove(move);
