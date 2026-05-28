@@ -178,21 +178,19 @@ public class Main {
         System.out.println("[Paralelo Híbrido] Tiempo de ejecución: " + durationPar + " ms");
 
         // =========================================================================
-        // --- NUEVA SOLUCIÓN: RETRASO ACTIVO MULTIHILO (CPU AL 100% REAL) ---
+        // --- RETRASO ACTIVO MULTIHILO (CPU AL 100% REAL) ---
         // =========================================================================
         System.out.println("\n>>> [SISTEMA BAJO PROCESAMIENTO FORZADO POR 15 SEGUNDOS] <<<");
-        System.out.println(">>> Captura el comando 'top' AHOMISMO. ¡La CPU está al 100% real! <<<");
+        System.out.println(">>> Captura el comando 'top' AHORAMISMO. ¡La CPU está al 100% real! <<<");
         
-        long finalizacionEstres = System.currentTimeMillis() + 15000; // Define la meta de 15 segundos
+        long finalizacionEstres = System.currentTimeMillis() + 15000; 
         
-        // Forzamos procesamiento matemático paralelo en el pool para mantener los 6 núcleos al límite
         pool.submit(() -> {
             while (System.currentTimeMillis() < finalizacionEstres) {
-                Math.sqrt(Math.random() * Math.PI); // Operación de coma flotante continua
+                Math.sqrt(Math.random() * Math.PI); 
             }
         });
         
-        // El hilo principal también se une al estrés para bloquear el sistema de forma activa
         while (System.currentTimeMillis() < finalizacionEstres) {
             Math.sqrt(Math.random() * Math.PI);
         }
@@ -221,31 +219,4 @@ public class Main {
             List<Integer> path = solveSequentialPure(p, best);
             if (path != null && (shortest == null || path.size() < shortest.size())) {
                 shortest = path; 
-                best = path.size();
-            }
-            p.undoMove(move);
-        }
-        return shortest;
-    }
-
-    public static List<Integer> solveSequentialLocal(ShortestPathProblem p, AtomicInteger globalBest) {
-        if (p.getCurrentPathLength() >= globalBest.get()) return null;
-        
-        if (p.isSolution()) {
-            int len = p.getCurrentPathLength();
-            globalBest.updateAndGet(cur -> Math.min(cur, len));
-            return new ArrayList<>(p.getCurrentPath());
-        }
-        
-        List<Integer> shortest = null;
-        for (int move : p.getPossibleMoves()) {
-            p.applyMove(move);
-            List<Integer> path = solveSequentialLocal(p, globalBest);
-            if (path != null && (shortest == null || path.size() < shortestPath.size())) {
-                shortest = path;
-            }
-            p.undoMove(move);
-        }
-        return shortest;
-    }
-}
+                best
