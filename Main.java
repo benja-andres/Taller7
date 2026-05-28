@@ -219,4 +219,32 @@ public class Main {
             List<Integer> path = solveSequentialPure(p, best);
             if (path != null && (shortest == null || path.size() < shortest.size())) {
                 shortest = path; 
-                best
+                best = path.size();
+            }
+            p.undoMove(move);
+        }
+        return shortest;
+    }
+
+    public static List<Integer> solveSequentialLocal(ShortestPathProblem p, AtomicInteger globalBest) {
+        if (p.getCurrentPathLength() >= globalBest.get()) return null;
+        
+        if (p.isSolution()) {
+            int len = p.getCurrentPathLength();
+            globalBest.updateAndGet(cur -> Math.min(cur, len));
+            return new ArrayList<>(p.getCurrentPath());
+        }
+        
+        List<Integer> shortest = null;
+        for (int move : p.getPossibleMoves()) {
+            p.applyMove(move);
+            List<Integer> path = solveSequentialLocal(p, globalBest);
+            // Aquí corregí la variable errónea que gatillaba el fallo de compilación
+            if (path != null && (shortest == null || path.size() < shortest.size())) {
+                shortest = path;
+            }
+            p.undoMove(move);
+        }
+        return shortest;
+    }
+}
