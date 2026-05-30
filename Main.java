@@ -1,196 +1,229 @@
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.RecursiveTask;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-interface ShortestPathProblem {
-    boolean isSolution();
-    void applyMove(int move);
-    void undoMove(int move);
-    List<Integer> getPossibleMoves();
-    List<Integer> getCurrentPath();
-    int getCurrentPathLength();
-    ShortestPathProblem cloneProblem();
-}
+public class ShortestPathBenchmark {
 
-class ParallelShortestPath extends RecursiveTask<List<Integer>> {
-    private ShortestPathProblem problem;
-    private AtomicInteger bestPathLength;
-    private static final int FORK_THRESHOLD = 4; 
-
-    public ParallelShortestPath(ShortestPathProblem problem, AtomicInteger bestPathLength) {
-        this.problem = problem;
-        this.bestPathLength = bestPathLength;
+    interface ShortestPathProblem {
+        boolean isSolution();
+        void applyMove(int move);
+        void undoMove(int move);
+        List<Integer> getPossibleMoves();
+        List<Integer> getCurrentPath();
+        int getCurrentPathLength();
+        ShortestPathProblem deepCopy();
     }
 
-    @Override
-    protected List<Integer> compute() {
-        if (problem.getCurrentPathLength() >= bestPathLength.get()) return null;
-        if (problem.isSolution()) {
-            int len = problem.getCurrentPathLength();
-            bestPathLength.updateAndGet(cur -> Math.min(cur, len));
-            return new ArrayList<>(problem.getCurrentPath());
-        }
-        List<Integer> moves = problem.getPossibleMoves();
-        if (moves.isEmpty()) return null;
+    static class GraphProblem implements ShortestPathProblem {
+        private final int[][] adjMatrix;
+        private final int n;
+        private final int start;
+        private final int end;
+        private final List<Integer> path;
+        private final boolean[] visited;
 
-        if (problem.getCurrentPathLength() >= FORK_THRESHOLD) {
-            return Main.solveSequentialLocal(problem, bestPathLength);
+        GraphProblem(int[][] adjMatrix, int start, int end) {
+            this.adjMatrix = adjMatrix;
+            this.n         = adjMatrix.length;
+            this.start     = start;
+            this.end       = end;
+            this.path      = new ArrayList<>();
+            this.visited   = new boolean[n];
+            path.add(start);
+            visited[start] = true;
         }
 
+        private GraphProblem(GraphProblem other) {
+            this.adjMatrix = other.adjMatrix;
+            this.n         = other.n;
+            this.start     = other.start;
+            this.end       = other.end;
+            this.path      = new ArrayList<>(other.path);
+            this.visited   = Arrays.copyOf(other.visited, other.n);
+        }
+
+        @Override public boolean isSolution() {
+            return !path.isEmpty() && path.get(path.size() - 1) == end;
+        }
+        @Override public void applyMove(int move) { path.add(move); visited[move] = true; }
+        @Override public void undoMove(int move)  { path.remove(path.size() - 1); visited[move] = false; }
+        @Override public List<Integer> getCurrentPath()  { return new ArrayList<>(path); }
+        @Override public int getCurrentPathLength()       { return path.size(); }
+        @Override public ShortestPathProblem deepCopy()  { return new GraphProblem(this); }
+
+        @Override
+        public List<Integer> getPossibleMoves() {
+            if (path.isEmpty()) return Collections.emptyList();
+            int current = path.get(path.size() - 1);
+            List<Integer> moves = new ArrayList<>();
+            for (int i = 0; i < n; i++)
+                if (adjMatrix[current][i] != 0 && !visited[i])
+                    moves.add(i);
+            return moves;
+        }
+    }
+
+    static List<Integer> sequentialBacktracking(ShortestPathProblem problem) {
+        if (problem.isSolution()) return problem.getCurrentPath();
         List<Integer> shortestPath = null;
-        List<ParallelShortestPath> tasks = new ArrayList<>();
-        for (int move : moves) {
+        for (int move : problem.getPossibleMoves()) {
             problem.applyMove(move);
-            tasks.add(new ParallelShortestPath(problem.cloneProblem(), bestPathLength));
+            List<Integer> path = sequentialBacktracking(problem);
+            if (path != null && (shortestPath == null || path.size() < shortestPath.size()))
+                shortestPath = path;
             problem.undoMove(move);
-        }
-        for (int i = 0; i < tasks.size() - 1; i++) tasks.get(i).fork();
-        List<Integer> local = tasks.get(tasks.size() - 1).compute();
-        if (local != null && (shortestPath == null || local.size() < shortestPath.size()))
-            shortestPath = local;
-        for (int i = 0; i < tasks.size() - 1; i++) {
-            List<Integer> p = tasks.get(i).join();
-            if (p != null && (shortestPath == null || p.size() < shortestPath.size()))
-                shortestPath = p;
         }
         return shortestPath;
     }
-}
 
-class MyShortestPathProblem implements ShortestPathProblem {
-    private int[][] graph;
-    private int targetNode, currentNode;
-    private List<Integer> currentPath;
-    private boolean[] visited;
+    static class ParallelShortestPath extends RecursiveTask<List<Integer>> {
+        private final ShortestPathProblem problem;
+        private final AtomicInteger bestPathLength;
 
-    public MyShortestPathProblem(int[][] graph, int startNode, int targetNode) {
-        this.graph = graph; this.targetNode = targetNode; this.currentNode = startNode;
-        this.currentPath = new ArrayList<>(); this.visited = new boolean[graph.length];
-        this.currentPath.add(startNode); this.visited[startNode] = true;
-    }
-    private MyShortestPathProblem(int[][] graph, int targetNode, int currentNode, List<Integer> path, boolean[] visited) {
-        this.graph = graph; this.targetNode = targetNode; this.currentNode = currentNode;
-        this.currentPath = new ArrayList<>(path); this.visited = visited.clone();
-    }
-    @Override public boolean isSolution() { return currentNode == targetNode; }
-    @Override public void applyMove(int m) { currentPath.add(m); visited[m]=true; currentNode=m; }
-    @Override public void undoMove(int m) {
-        currentPath.remove(currentPath.size()-1); visited[m]=false;
-        currentNode = currentPath.get(currentPath.size()-1);
-    }
-    @Override public List<Integer> getPossibleMoves() {
-        List<Integer> mv = new ArrayList<>();
-        for (int i=graph.length-1; i>=0; i--) if (graph[currentNode][i]==1 && !visited[i]) mv.add(i);
-        return mv;
-    }
-    @Override public List<Integer> getCurrentPath() { return currentPath; }
-    @Override public int getCurrentPathLength() { return currentPath.size(); }
-    @Override public ShortestPathProblem cloneProblem() {
-        return new MyShortestPathProblem(graph, targetNode, currentNode, currentPath, visited);
-    }
-}
-
-public class Main {
-
-    // Generador flexible de matrices
-    static int[][] generateGraph(int n, int layers, double density, long seed) {
-        java.util.Random rng = new java.util.Random(seed);
-        int[][] g = new int[n][n];
-        int perLayer = n / layers;
-        for (int layer = 0; layer < layers - 1; layer++) {
-            int from = layer * perLayer;
-            int to   = (layer + 1) * perLayer;
-            for (int i = from; i < from + perLayer; i++) {
-                int randomNext = to + rng.nextInt(Math.min(perLayer, n - to));
-                g[i][randomNext] = 1; g[randomNext][i] = 1;
-            }
-            for (int i = from; i < from + perLayer; i++)
-                for (int j = to; j < Math.min(to + perLayer, n); j++)
-                    if (rng.nextDouble() < density) { g[i][j]=1; g[j][i]=1; }
+        ParallelShortestPath(ShortestPathProblem problem, AtomicInteger bestPathLength) {
+            this.problem        = problem;
+            this.bestPathLength = bestPathLength;
         }
-        return g;
+
+        @Override
+        protected List<Integer> compute() {
+            if (problem.getCurrentPathLength() >= bestPathLength.get()) return null;
+            if (problem.isSolution()) {
+                int len = problem.getCurrentPathLength();
+                bestPathLength.updateAndGet(cur -> Math.min(cur, len));
+                return problem.getCurrentPath();
+            }
+            List<Integer> moves = problem.getPossibleMoves();
+            if (moves.isEmpty()) return null;
+
+            List<ParallelShortestPath> subtasks = new ArrayList<>();
+            for (int move : moves) {
+                ShortestPathProblem copy = problem.deepCopy();
+                copy.applyMove(move);
+                subtasks.add(new ParallelShortestPath(copy, bestPathLength));
+            }
+
+            for (int i = 0; i < subtasks.size() - 1; i++) subtasks.get(i).fork();
+
+            List<Integer> shortestPath = subtasks.get(subtasks.size() - 1).compute();
+
+            for (int i = 0; i < subtasks.size() - 1; i++) {
+                List<Integer> result = subtasks.get(i).join();
+                if (result != null && (shortestPath == null || result.size() < shortestPath.size()))
+                    shortestPath = result;
+            }
+            return shortestPath;
+        }
+    }
+
+    static int[][] buildDenseMatrix(int n) {
+        Random rnd = new Random(42);
+        int[][] m = new int[n][n];
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                if (i != j && rnd.nextDouble() < 0.70)
+                    m[i][j] = 1;
+        return m;
+    }
+
+    static int[][] buildSparseMatrix(int n) {
+        int[][] m = new int[n][n];
+        Random rnd = new Random(42);
+        for (int i = 0; i < n - 1; i++) m[i][i + 1] = 1;
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                if (i != j && m[i][j] == 0 && rnd.nextDouble() < 0.15)
+                    m[i][j] = 1;
+        return m;
+    }
+
+    static int[][] buildObstacleMatrix(int side) {
+        int n = side * side;
+        int[][] m = new int[n][n];
+        Random rnd = new Random(42);
+        Set<Integer> blocked = new HashSet<>();
+        while (blocked.size() < n / 5) {
+            int node = 1 + rnd.nextInt(n - 2);
+            blocked.add(node);
+        }
+        for (int r = 0; r < side; r++) {
+            for (int c = 0; c < side; c++) {
+                int node = r * side + c;
+                if (blocked.contains(node)) continue;
+                int[] neighbors = {
+                        (r-1)*side + c, (r+1)*side + c,
+                        r*side + (c-1), r*side + (c+1)
+                };
+                for (int nb : neighbors)
+                    if (nb >= 0 && nb < n && !blocked.contains(nb))
+                        m[node][nb] = 1;
+            }
+        }
+        return m;
+    }
+
+    static double[] runBenchmark(String matrixName, int[][] matrix, int start, int end) {
+
+        // --- Secuencial ---
+        GraphProblem seqProblem = new GraphProblem(matrix, start, end);
+        long t0 = System.nanoTime();
+        List<Integer> seqPath = sequentialBacktracking(seqProblem);
+        double seqMs = (System.nanoTime() - t0) / 1_000_000.0;
+
+        // --- Paralelo ---
+        GraphProblem parProblem = new GraphProblem(matrix, start, end);
+        AtomicInteger bestLen   = new AtomicInteger(Integer.MAX_VALUE);
+        ForkJoinPool  pool      = new ForkJoinPool();
+        long t1 = System.nanoTime();
+        List<Integer> parPath = pool.invoke(new ParallelShortestPath(parProblem, bestLen));
+        double parMs = (System.nanoTime() - t1) / 1_000_000.0;
+        pool.shutdown();
+
+        // --- Output ---
+        System.out.println("\n=== Iniciando prueba de rendimiento [" + matrixName + "] ===");
+        System.out.println("[Secuencial] Camino encontrado: " + (seqPath != null ? seqPath : "No existe"));
+        System.out.printf("[Secuencial] Tiempo de ejecucion: %.3f ms%n", seqMs);
+        System.out.println("[Paralelo]   Camino encontrado: " + (parPath != null ? parPath : "No existe"));
+        System.out.printf("[Paralelo]   Tiempo de ejecucion: %.3f ms%n", parMs);
+
+        double diff = seqMs - parMs;
+        System.out.println("=== Resumen de Mejora ===");
+        System.out.printf("Diferencia de tiempo: %.3f ms%n", diff);
+        if (diff > 0.001 && parMs > 0.001) {
+            System.out.printf(">> El PARALELO es mas rapido por %.3f ms (%.2fx mas rapido)%n", diff, seqMs / parMs);
+        } else if (diff > 0.001) {
+            System.out.printf(">> El PARALELO es mas rapido por %.3f ms%n", diff);
+        } else if (diff < -0.001 && seqMs > 0.001) {
+            System.out.printf(">> El SECUENCIAL es mas rapido por %.3f ms (%.2fx mas rapido)%n", Math.abs(diff), parMs / seqMs);
+        } else if (diff < -0.001) {
+            System.out.printf(">> El SECUENCIAL es mas rapido por %.3f ms%n", Math.abs(diff));
+        } else {
+            System.out.println(">> Ambos tomaron el mismo tiempo");
+        }
+
+        return new double[]{seqMs, parMs};
     }
 
     public static void main(String[] args) {
-        System.out.println("=== BENCHMARK DE MATRICES (ESTRES DINÁMICO) ===");
-        System.out.println("Núcleos de CPU detectados: " + Runtime.getRuntime().availableProcessors() + "\n");
+        System.out.println("=== Taller 7 - Backtracking Paralelo: Camino mas corto ===");
 
-        // Definimos los 4 escenarios de matrices a comparar
-        String[] nombres = { "Matriz 1: Pequeña e hiperconectada", "Matriz 2: Mediana estándar", "Matriz 3: Grande (Laberinto complejo)", "Matriz 4: Monstruo masivo" };
-        int[] nodos      = { 20, 50, 100, 130 };
-        int[] capas      = { 4,  6,   8,   10 };
-        double[] densidades = { 0.85, 0.50, 0.35, 0.25 };
+        double[] r1 = runBenchmark("DENSA (70% aristas, 10 nodos)",    buildDenseMatrix(10),    0, 9);
+        double[] r2 = runBenchmark("DISPERSA (15% aristas, 10 nodos)", buildSparseMatrix(10),   0, 9);
+        double[] r3 = runBenchmark("CON OBSTACULOS (cuadricula 4x4)",  buildObstacleMatrix(4),  0, 15);
 
-        List<String> reporteFinal = new ArrayList<>();
-        ForkJoinPool pool = new ForkJoinPool();
-
-        for (int k = 0; k < nombres.length; k++) {
-            int N = nodos[k];
-            int[][] graph = generateGraph(N, capas[k], densidades[k], 101L);
-            
-            System.out.println("Ejecutando " + nombres[k] + " (" + N + " nodos)...");
-
-            // --- TEST SECUENCIAL ---
-            long startSeq = System.currentTimeMillis();
-            List<Integer> pathSeq = solveSequentialPure(new MyShortestPathProblem(graph, 0, N - 1), Integer.MAX_VALUE);
-            long timeSeq = System.currentTimeMillis() - startSeq;
-
-            // --- TEST PARALELO ---
-            long startPar = System.currentTimeMillis();
-            AtomicInteger best = new AtomicInteger(Integer.MAX_VALUE);
-            List<Integer> pathPar = pool.invoke(new ParallelShortestPath(new MyShortestPathProblem(graph, 0, N - 1), best));
-            long timePar = System.currentTimeMillis() - startPar;
-
-            // Calcular Speedup
-            double speedup = (double) timeSeq / Math.max(1, timePar);
-            String ganador = (timeSeq < timePar) ? "Secuencial" : (timeSeq > timePar ? "Paralelo" : "Empate");
-            
-            reporteFinal.add(String.format("| %-32s | %-6d | %-7d ms | %-7d ms | %-8.2fx | %-10s |", 
-                    nombres[k], N, timeSeq, timePar, speedup, ganador));
+        System.out.println("\n=========================================");
+        System.out.println("  TABLA COMPARATIVA FINAL");
+        System.out.println("=========================================");
+        System.out.printf("%-32s %12s %12s %12s%n", "Matriz", "Secuencial", "Paralelo", "Diferencia");
+        System.out.println("-".repeat(70));
+        String[] nombres    = {"DENSA", "DISPERSA", "CON OBSTACULOS"};
+        double[][] results  = {r1, r2, r3};
+        for (int i = 0; i < 3; i++) {
+            double diff = results[i][0] - results[i][1];
+            String ganador = diff > 0.001 ? "(+Paralelo)" : diff < -0.001 ? "(+Secuencial)" : "(Empate)";
+            System.out.printf("%-32s %9.3f ms %9.3f ms %7.3f ms %s%n",
+                    nombres[i], results[i][0], results[i][1], diff, ganador);
         }
-        pool.shutdown();
-
-        // Imprimir el Gran Resumen
-        System.out.println("\n==========================================================================================");
-        System.out.println("                                TABLA COMPARATIVA FINAL                                   ");
-        System.out.println("==========================================================================================");
-        System.out.println("| Escenario                        | Nodos  | Secuenc.  | Paralelo  | Speedup  | Ganador    |");
-        System.out.println("==========================================================================================");
-        for (String linea : reporteFinal) {
-            System.out.println(linea);
-        }
-        System.out.println("==========================================================================================");
-    }
-
-    static List<Integer> solveSequentialPure(ShortestPathProblem p, int best) {
-        if (p.getCurrentPathLength() >= best) return null;
-        if (p.isSolution()) return new ArrayList<>(p.getCurrentPath());
-        List<Integer> shortest = null;
-        for (int move : p.getPossibleMoves()) {
-            p.applyMove(move);
-            List<Integer> path = solveSequentialPure(p, best);
-            if (path != null && (shortest == null || path.size() < shortest.size())) { shortest = path; best = path.size(); }
-            p.undoMove(move);
-        }
-        return shortest;
-    }
-
-    public static List<Integer> solveSequentialLocal(ShortestPathProblem p, AtomicInteger globalBest) {
-        if (p.getCurrentPathLength() >= globalBest.get()) return null;
-        if (p.isSolution()) {
-            int len = p.getCurrentPathLength();
-            globalBest.updateAndGet(cur -> Math.min(cur, len));
-            return new ArrayList<>(p.getCurrentPath());
-        }
-        List<Integer> shortest = null;
-        for (int move : p.getPossibleMoves()) {
-            p.applyMove(move);
-            List<Integer> path = solveSequentialLocal(p, globalBest);
-            if (path != null && (shortest == null || path.size() < shortest.size())) shortest = path;
-            p.undoMove(move);
-        }
-        return shortest;
+        System.out.println("=========================================");
     }
 }
